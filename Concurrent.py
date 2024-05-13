@@ -4,22 +4,25 @@ import math
 from Scrapper import Scrapper
 
 
-interval: int = 60 # 60s update time
-offset: int = 7 # to account for scrape & update time
-
 
 async def main() -> None:
-    last_updated: int
-    auctions: list[dict]
+    print("start")
+    
+    scrapper: Scrapper = Scrapper()
+    scrapper.start()
+    print("2")
+    
+    while True:
+        await asyncio.sleep(10)
     
 
-    scrapper: Scrapper = Scrapper()
     
+    """
     while True:
         start_time: int = time.time()*1000
         print(f"Start time:\t{start_time}")
         
-        last_updated, auctions = await scrapper.debug()
+        last_updated, auctions = await scrapper.get_auctions()
         print(f"Last updated:\t{last_updated}")
         
 
@@ -47,10 +50,18 @@ async def main() -> None:
             time.sleep(1)
         time.sleep((next_update - (seconds*1000))/1000)
         print("\b" * num_chars + " " * num_chars, end="\n")
-        
+    """
+    
+    
+    
 
-if __name__ == "__main__": 
+if __name__ == "__main__":
     asyncio.run(main())
+    
+    
+    
+
+    
 
     
 

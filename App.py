@@ -4,19 +4,13 @@ import math
 from Scrapper import Scrapper
 
 
-
 async def main() -> None:
-    print("start")
-    
+
     scrapper: Scrapper = Scrapper()
     scrapper.start()
-    print("2")
-    
+
     while True:
         await asyncio.sleep(10)
-    
-
-    
     """
     while True:
         start_time: int = time.time()*1000
@@ -51,18 +45,7 @@ async def main() -> None:
         time.sleep((next_update - (seconds*1000))/1000)
         print("\b" * num_chars + " " * num_chars, end="\n")
     """
-    
-    
-    
+
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
-    
-    
-
-    
-
-    
-
-

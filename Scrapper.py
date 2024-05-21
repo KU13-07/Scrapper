@@ -4,6 +4,7 @@ import io
 import time
 from collections import defaultdict
 from threading import Thread
+import json
 
 import aiohttp
 from nbt import nbt
@@ -24,11 +25,33 @@ def time_func(message: str):
     return decorator
 
 
+def format_var(var):
+    if isinstance(var, set):
+        return list(var)
+    elif isinstance(var, (dict, nbt.TAG_Compound)):
+        if all(key in var for key in ("quality", "uuid")):  # if is gem with uuid
+            return format_var(var["quality"])
+
+        return {k: format_var(v) for k, v in var.items()}
+    elif isinstance(var, nbt.TAG_Byte_Array):
+        return str(var)
+    elif isinstance(var, nbt.TAG):
+        var = var.value
+        if isinstance(var, str) and var.startswith("{"):
+            return format_var(json.loads(var))
+        return var
+
+    return var
+
+
 class Scrapper:
     __URL: str = "https://api.hypixel.net/v2/skyblock/auctions?page={}"
     __ENDED_URL: str = "https://api.hypixel.net/v2/skyblock/auctions_ended"
     __INTERVAL: int = 60 - 1  # to recalibrate
     __OFFSET: int = 14  # to account for initial update times
+
+    __SKIP_ATTRIBUTES: tuple = ("id", "uuid", "timestamp", "bossId", "spawnedFor", "originTag", "fungi_cutter_mode")
+    __SKIP_PROPERTIES: tuple = ("item_bytes", "uuid", "claimed", "category", "extra", "item_lore", "claimed_bidders", "last_updated", "claimed_bidders", "auctioneer", "profile_id", "coop")
 
     def __init__(self) -> None:
         self.__session: aiohttp.ClientSession
@@ -36,9 +59,9 @@ class Scrapper:
         self.__last_updated: int = 0
 
         # auction data
-        self.__index: dict[str: str] = {}
-        self.__auctions: dict = defaultdict(dict)
-        self.__enchantments: dict[str: set] = defaultdict(set)
+        self.__index: dict[str: str]
+        self.__auctions: dict
+        self.__extras: dict[str: dict[str: set]]
 
     async def __fetch_page(self, url: str, update: bool = False) -> dict:
         resp: aiohttp.ClientResponse = await self.__session.get(url)
@@ -107,7 +130,7 @@ class Scrapper:
         return auctions
 
     @time_func("Fetch new")
-    async def __get_new(self) -> list[dict]:
+    async def __get_new(self, index: dict[str: str]) -> list[dict]:
         new_auctions: list[dict] = []
         page_num: int = 0
 
@@ -118,7 +141,7 @@ class Scrapper:
 
             for auction in auctions:
                 # new auctions are prepended but non-bin auctions remain in the same index
-                if auction["uuid"] in self.__index:
+                if auction["uuid"] in index:
                     if auction["bin"]:
                         return new_auctions
                 else:  # prevent adding existing non-bin in new_auctions
@@ -135,20 +158,6 @@ class Scrapper:
 
         return auction_ids
 
-    def __process_enchantments(self, item_data: nbt.TAG_List) -> dict[str: int]:
-        enchantments: dict = {}
-        if not ("enchantments" in item_data["tag"]["ExtraAttributes"]):
-            return enchantments
-
-        raw_enchantments: nbt.TAG_Compound = item_data["tag"]["ExtraAttributes"]["enchantments"]
-        enchantments = {enchant: level.value for enchant, level in raw_enchantments.iteritems()}
-
-        # update enchantments master list
-        for enchant, level in enchantments.items():
-            self.__enchantments[enchant].add(level)
-
-        return enchantments
-
     async def __process_auction(self, auction: dict) -> [str, dict]:
         item_bytes: str = auction["item_bytes"]
         decoded: bytes = base64.b64decode(item_bytes)
@@ -156,22 +165,29 @@ class Scrapper:
         nbtfile: nbt.NBTFile = nbt.NBTFile(fileobj=fileobj)
 
         item_data: nbt.TAG_List = nbtfile["i"][0]
-        item_id: str = item_data["tag"]["ExtraAttributes"]["id"].value
+        extra: nbt.TAG_Compound = item_data["tag"]["ExtraAttributes"]
+        item_id: str = extra["id"].value
         auction_uuid: str = auction["uuid"]
 
-        del auction["item_bytes"]
-        del auction["uuid"]
-        auction["item_data"] = item_data
-        auction["enchantments"] = self.__process_enchantments(item_data)
+        for entry in self.__SKIP_PROPERTIES:
+            if entry in auction:
+                del auction[entry]
+
+
+        auction["count"] = item_data["Count"]
+        auction["attributes"] = {
+            k: v for k, v in extra.items() if (k not in self.__SKIP_ATTRIBUTES)
+        }
 
         return item_id, auction_uuid, auction
 
     @time_func("Process time")
-    async def __process_auctions(self, auctions: list[dict], index: dict[str: str] = {}, old_auctions: dict[str: dict] = defaultdict(dict)) -> None:
-        async def update_dicts(new_index: dict[str: str], new_auctions: dict[str: dict]):
+    async def __process_auctions(self, auctions: list[dict], index: dict[str: str] = {}, old_auctions: dict[str: dict] = defaultdict(lambda: {"attributes": set(), "entries": {}}), extras: dict[str: set] = defaultdict(set)) -> None:
+        async def update_dicts(new_index: dict[str: str], new_auctions: dict[str: dict], new_extras: dict[str: set]):
             async with self.__lock:
                 self.__index = new_index
                 self.__auctions = new_auctions
+                self.__extras = new_extras
 
         # declaring variables
         item_id: str
@@ -179,30 +195,57 @@ class Scrapper:
         auction_uuid: str
 
         # synchronous auction processing
+        def update_extras(path, attributes: dict):
+            for attribute, value in attributes.items():
+                if not isinstance(value, dict):
+                    path[attribute].add(value)
+                else:
+                    if not isinstance(path[attribute], dict):
+                        path[attribute] = defaultdict(set)
+
+                    update_extras(path[attribute], value)
+
         for auction in auctions:
             item_id, auction_uuid, auction_data = await self.__process_auction(auction)
 
-            if auction_uuid in self.__index:
-                raise Exception("double entry")
-
             index[auction_uuid] = item_id
-            old_auctions[item_id][auction_uuid] = auction_data
+            old_auctions[item_id]["entries"][auction_uuid] = auction_data
 
-        await update_dicts(index, old_auctions)
+            # print(format_var(auction["attributes"]))
+            update_extras(extras, format_var(auction["attributes"]))
+            # for k, v in format_var(auction["attributes"]).items():
+            #     if not isinstance(v, dict):
+            #         extras[k].add(v)
+            #     else:
+            #         if not isinstance(extras[k], dict):
+            #             extras[k] = defaultdict(set)
+            #
+            #         for a, b in v.items():
+            #             if not isinstance(b, dict):
+            #                 extras[k][a].add(b)
+            #             else:
+            #                 if not isinstance(extras[k][a], dict):
+            #                     extras[k][a] = defaultdict(set)
+            #
+            #                 for c, d in v.items():
+            #                     extras[k][a][c].add(d)
+
+
+        await update_dicts(index, old_auctions, extras)
 
     @time_func("Remove ended")
     async def __remove_auctions(self, ended: list, index: dict[str: str], auctions: dict[str: dict]) -> None:
         # sync
         for auction_uuid in ended:
             # theoretically should always work after first run to sync
-            if auction_uuid not in self.__index:
+            if auction_uuid not in index:
                 print("ended not in db")
                 continue
 
-            item_id: str = self.__index[auction_uuid]
+            item_id: str = index[auction_uuid]
 
             del index[auction_uuid]
-            del auctions[item_id][auction_uuid]
+            del auctions[item_id]["entries"][auction_uuid]
 
         # no index
         """
@@ -219,8 +262,9 @@ class Scrapper:
             print("\nStarting update")
 
             # variables
-            new_index: dict[str: str] = self.__index.copy()
-            new_auctions: dict[str: dict] = self.__auctions.copy()
+            new_index = self.__index.copy()
+            new_auctions = self.__auctions.copy()
+            new_extras = self.__extras.copy()
 
             async with aiohttp.ClientSession() as self.__session:
                 # shrink dicts before modifying
@@ -228,12 +272,19 @@ class Scrapper:
                 await self.__remove_auctions(ended, new_index, new_auctions)
 
                 # update dicts
-                new: list[dict] = await self.__get_new()
-                await self.__process_auctions(new, new_index, new_auctions)
+                new: list[dict] = await self.__get_new(new_index)
+                await self.__process_auctions(new, new_index, new_auctions, new_extras)
 
         async with aiohttp.ClientSession() as self.__session:
             auctions: list = await self.__get_auctions()
             await self.__process_auctions(auctions)  # update master dicts to current
+
+        # output each major db variable
+        for data_name in ["index", "auctions", "extras"]:
+            with open(f"samples/{data_name}.json", "w", encoding="utf-8") as f:
+                print(data_name)
+                data = getattr(self, f"_Scrapper__{data_name}")
+                json.dump(format_var(data), f, indent=2)
 
         # calibration
         current_time: float = time.time()
@@ -263,6 +314,17 @@ class Scrapper:
         # thread.setDaemon(True)  # if main thread closes so will it
         thread.start()
 
-    async def get_auctions(self):
+    async def get_auctions(self) -> dict[str: dict]:
         async with self.__lock:
             return self.__auctions.copy()
+
+    async def get_items(self) -> list[str]:
+        def process_id(item_id: str) -> str:
+            return " ".join(word.capitalize() for word in item_id.split("_"))
+
+        async with self.__lock:
+            return [process_id(item_id) for item_id in self.__auctions.keys()]
+
+    async def get_extras(self) -> dict[str: dict[str: set]]:
+        async with self.__lock:
+            return self.__extras.copy()

@@ -15,20 +15,32 @@ async def on_ready():
 
 
 async def item_id_autocomplete(ctx: discord.AutocompleteContext):
-    auctions: dict = await scrapper.get_auctions()
-    item_ids: list = list(auctions.keys())
+    item_ids: list[str] = await scrapper.get_items()
 
     return item_ids
 
 
 @bot.slash_command()
-async def test(
-    ctx: discord.ApplicationContext,
-    item_id: str = discord.Option(
-        autocomplete=discord.utils.basic_autocomplete(item_id_autocomplete),
-        required=True,
-    ),
-    bin: bool = discord.Option(bool, required=False),
+async def test(ctx: discord.ApplicationContext, item_name: str = discord.Option(
+    autocomplete=discord.utils.basic_autocomplete(item_id_autocomplete),
+    required=True
+)):
+    item_id = item_name.replace(" ", "_").upper()
+    auctions = await scrapper.get_auctions()
+    attributes = auctions[item_id]["attributes"]
+
+    embed = discord.Embed(title=item_name, description="\n".join(attributes))
+    await ctx.respond(embed=embed)
+
+
+@bot.slash_command()
+async def ahstats(
+        ctx: discord.ApplicationContext,
+        item_name: str = discord.Option(
+            autocomplete=discord.utils.basic_autocomplete(item_id_autocomplete),
+            required=True,
+        ),
+        bin: bool = discord.Option(bool, required=False),
 ):
     def format_output(num: float):  # god bless stack overflow
         magnitude: int = 0
@@ -38,14 +50,14 @@ async def test(
 
         return f"{round(num, 2)} {['', 'K', 'M', 'B'][magnitude]}"
 
-
-    auctions: dict[list] = await scrapper.get_auctions()
+    auctions: dict = await scrapper.get_auctions()
+    item_id: str = item_name.replace(" ", "_").upper()
     filtered = [
-        auction["starting_bid"]
-        for auction in auctions[item_id].values()
-        if (bin == None or auction["bin"] == bin)
+        auction["starting_bid"] if (auction["bin"] or auction["highest_bid_amount"] == 0) else auction["highest_bid_amount"]
+        for auction in auctions[item_id]["entries"].values()
+        if (bin is None or auction["bin"] == bin)
     ]
-    
+
     await ctx.defer()
 
     embed = discord.Embed(title=item_id)
@@ -63,10 +75,6 @@ async def test(
         embed.add_field(name=name, value=format_output(value), inline=False)
 
     await ctx.respond(embed=embed)
-
-@bot.slash_command()
-async def ping(ctx: discord.ApplicationContext):
-    await ctx.respond(f"hi")
 
 if __name__ == "__main__":
     scrapper.start()

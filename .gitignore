@@ -1,0 +1,5 @@
+.idea
+samples
+test.py
+*.txt
+*.pyc

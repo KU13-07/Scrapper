@@ -6,5 +6,14 @@ When making requests, we must compare when this set was last updated and when ou
 | Same      | Wait   | ✓         |
 | Newer     | ✓      | X         |
 
+
 ## New Auctions
 In order to avoid completely rescrapping all pages of auctions data, we can start from the beginning until we've found an old auction. This works because new auctions are prepended, however non-bins will retain the same position in the list. So in we can start from the beginning, grab all auctions until we reach an existing auction that is a bin, and ignore repeating non-bins.
+
+
+## Item-Specific vs. Category-Specific Attributes
+| Item                            | Category                             |
+|---------------------------------|--------------------------------------|
+| More detailed data              | Potentially inaccurate item data     |
+| Potentially incomplete data set | More developed data                  |
+| Much larger memory usage        | Smaller memory and perfomance impact |

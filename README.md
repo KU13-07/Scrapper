@@ -12,6 +12,7 @@ In order to avoid completely rescrapping all pages of auctions data, we can star
 
 
 ## Item-Specific vs. Category-Specific Attributes
+Usually items will fall under a category such as "bow", "sword", "helmet"... However, on occasion, despite being in a category, items may have item specific attributes. To prevent this attribute from being shown as a possibility for all items within the category, we must seperate item-specific and category-specific.
 | Item                            | Category                             |
 |---------------------------------|--------------------------------------|
 | More detailed data              | Potentially inaccurate item data     |
